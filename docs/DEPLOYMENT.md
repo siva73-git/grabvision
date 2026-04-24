@@ -27,12 +27,12 @@ npm run build
 
 Known local status:
 
-- Git remote is not configured yet.
-- GitHub CLI is installed, but auth for `siva73-git` is currently invalid.
+- GitHub repo is configured and pushed: `https://github.com/siva73-git/grabvision`
 - Vercel CLI is available through `npm exec vercel`.
 - Vercel CLI is authenticated as `roboticstb-3552`.
 - Production and Development env vars were added to Vercel.
-- Preview env vars need a connected Git repository before branch-scoped preview values can be added.
+- Vercel Git connection is not active yet. `vercel git connect https://github.com/siva73-git/grabvision.git` failed because the Vercel account needs a GitHub Login Connection added in the Vercel UI.
+- Preview env vars need the connected Git repository before branch-scoped preview values can be added.
 
 ## Required Vercel Environment Variables
 
@@ -48,7 +48,14 @@ Do not commit `.env` files. The repo `.gitignore` already excludes `.env*`.
 
 ## Suggested GitHub Flow
 
-After GitHub CLI is re-authenticated:
+Current remote:
+
+```bash
+git remote -v
+# origin  https://github.com/siva73-git/grabvision.git
+```
+
+The repo was created as private. To recreate this manually:
 
 ```bash
 gh auth login -h github.com
@@ -56,6 +63,24 @@ gh repo create siva73-git/grabvision --private --source=. --remote=origin --push
 ```
 
 Use `--public` instead of `--private` only if the hackathon rules and API-key hygiene are comfortable.
+
+## Vercel Git Connection
+
+The local Vercel project is linked, but the Vercel account still needs a GitHub Login Connection before automatic Git deploys/previews can be enabled.
+
+After adding the GitHub connection in Vercel, run:
+
+```bash
+npm exec vercel -- git connect https://github.com/siva73-git/grabvision.git
+```
+
+Then add Preview env vars for `main` if needed:
+
+```bash
+npm exec vercel -- env add GRABMAPS_API_KEY preview main
+npm exec vercel -- env add NEXT_PUBLIC_GRABMAPS_API_KEY preview main
+npm exec vercel -- env add GOOGLE_PLACES_API_KEY preview main
+```
 
 ## Suggested Vercel Flow
 
