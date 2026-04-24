@@ -2,7 +2,13 @@
 
 Last updated: 2026-04-24
 
-GrabVision is a mobile-first walking navigation PWA for Singapore. It uses GrabMaps for map styling, route data, and POI discovery where possible, then falls back to checked-in exterior/street-view-style demo assets so the hackathon demo remains reliable.
+GrabVision is meant to solve the "final 100m" challenge of reaching a destination for everyone. It provides visual wayfinding and prompts in subtle and not-so-subtle ways so a walker can get somewhere without depending on any single piece of technology such as GPS, a phone compass, or a traditional overhead map.
+
+In addition to standard overhead route maps, GrabVision's key value is using GrabMaps hyperlocal map information to identify decision-relevant cue points along a journey: where the user should go left, right, straight, or recognize arrival. Each cue point gives the user visual feedback based on what they should see in the real world. More subtle feedback, such as the solar-position guide, shows where the sun should be relative to the user's path so it can become another orientation reference.
+
+The eventual goal is to make the entire path available as a low-FPS animated journey preview, letting the user rehearse the route before taking a single step.
+
+GrabVision is currently implemented as a mobile-first walking navigation PWA for Singapore. It uses GrabMaps for map styling, route data, and POI discovery where possible, then falls back to checked-in exterior/street-view-style demo assets so the hackathon demo remains reliable.
 
 The current demo route is:
 

@@ -1,33 +1,284 @@
-# GrabVision (GrabPath)
+# Architecture & Data Schema
 
-A "Story-style" navigation Progressive Web App (PWA) designed for Singapore's urban canyons. GrabVision replaces traditional 2D map lines with visual landmarks (Grab POIs), solar orientation, and cinematic previews to create a human-centric navigation experience.
+Last updated: 2026-04-24
 
-Built as a 6-hour hackathon project.
+GrabVision is meant to solve the "final 100m" challenge of reaching a destination for everyone. It provides visual wayfinding and prompts in subtle and not-so-subtle ways so a walker can get somewhere without depending on any single piece of technology such as GPS, a phone compass, or a traditional overhead map.
 
-## Project Objectives
-- **Human-Centric Navigation**: Move away from staring at top-down maps. Use real-world landmarks, clear swipeable cards, and haptics to guide the user.
-- **Cinematic Experience**: Provide a "pre-flight" flyover of the route using MapLibre GL JS to reduce anxiety before the walk begins.
-- **Orientation Fallbacks**: Integrate iOS Magnetometer and solar azimuth calculations to help users orient themselves when GPS bounces in dense urban areas.
+In addition to standard overhead route maps, GrabVision's key value is using GrabMaps hyperlocal map information to identify decision-relevant cue points along a journey: where the user should go left, right, straight, or recognize arrival. Each cue point gives the user visual feedback based on what they should see in the real world. More subtle feedback, such as the solar-position guide, shows where the sun should be relative to the user's path so it can become another orientation reference.
 
-## Core Technology Stack
-- **Frontend**: Next.js 15 (App Router), React, Tailwind CSS
-- **Animation**: Framer Motion
-- **Maps**: MapLibre GL JS (configured for Grab Maps Vector Tiles)
-- **Hardware Integrations**: iOS Magnetometer API (Compass), Web Vibrate API (Haptics)
-- **Deployment**: Vercel (PWA Enabled)
+The eventual goal is to make the entire path available as a low-FPS animated journey preview, letting the user rehearse the route before taking a single step.
 
-## Documentation Index
-For AI Coding Assistants (Codex, Cursor, etc.) and developers, please refer to the following documentation files to understand the system context:
-- [Architecture & Data Schema](docs/ARCHITECTURE.md)
-- [Requirements & Features](docs/REQUIREMENTS.md)
-- [Implementation Prompts](docs/PROMPTS.md)
-- [GrabMaps API & MCP Skills Reference](docs/GRABMAPS_API.md)
+GrabVision is currently implemented as a mobile-first walking navigation PWA for Singapore. It uses GrabMaps for map styling, route data, and POI discovery where possible, then falls back to checked-in exterior/street-view-style demo assets so the hackathon demo remains reliable.
 
-## Getting Started
+The current demo route is:
+
+**Furama City Centre -> Maxwell Food Centre**
+
+This route was chosen because it runs through Chinatown, has dense street-level visual landmarks, and is more likely to have recognizable place imagery than an indoor MRT-to-office segment.
+
+## System Architecture
+
+### Frontend
+
+The main UI is implemented in `app/page.tsx`.
+
+1. **Route controls**
+   - Origin and destination fields are shown at the top of the app.
+   - The current default values are the curated downtown demo route.
+   - The refresh and `Route` buttons keep the curated demo route when the inputs match the default Furama City Centre -> Maxwell Food Centre pair. This prevents a live provider refresh from changing the 1.1km demo distance or replacing Section 2 exterior cue images.
+   - If the user changes the inputs away from the defaults, `Route` calls `/api/navigation` for a live provider route.
+
+2. **Grab-style navigation surface**
+   - Uses Grab green (`#00B14F`), white surfaces, compact controls, and a Grab-first font stack.
+   - The font stack activates `Sanomat Grab`, `Sanomat Grab Web`, `Grab Community`, or `GRAB COMMUNITY` if the font is available locally or later provided as licensed assets.
+   - iPhone safe-area padding is applied with `env(safe-area-inset-*)` so the header and story controls avoid the notch/home indicator.
+
+3. **Map panel**
+   - `components/RouteMap.tsx` renders Section 1 as a top-down basemap plus route/cue overlay using the same Web Mercator viewport so the route and map stay aligned.
+   - GrabMaps MapLibre is still initialized and receives GeoJSON route/cue layers. Because the current GrabMaps canvas can render pale/blank in the demo environment, a styled static top-down basemap is layered under the app-owned route overlay for visual reliability.
+   - The visible route line, start/end dots, cue dots, and active facing arrow are drawn from `NavigationRoute.route_geometry` and `NavigationRoute.steps`.
+   - If the static basemap fails, the same app-owned north-up route overlay still paints the route, cue dots, and facing arrow on the neutral background for demo reliability.
+   - The map camera stays `pitch: 0` and `bearing: 0`; facing is shown with an arrow instead of rotating or tilting the map.
+   - Bottom overlay badges are intentionally flush to the Section 1 corners: distance/time on the left and a Direction Buddy preview pill on the right. This keeps the demo focused on the product UI and prevents provider attribution clutter from competing with the route.
+   - This is Section 1 of the UX: a collapsible 2D route overview for the initial “how do I go?” mental model.
+
+4. **Landmark cue cards**
+   - `components/StoryCard.tsx` renders the current `NavStep`.
+   - Users can swipe horizontally through route steps.
+   - Card changes trigger haptics where the browser supports `navigator.vibrate`.
+   - Demo route cards are intentionally frequent and pedestrian-scale: hotel frontage, People's Park Centre, Chinatown MRT Exit C, Pagoda Street, Trengganu Street, Ann Siang Road, the Kadayanallur Street corner, and Maxwell Food Centre.
+   - Section 2 is now exterior-image-first for demo reliability: all current demo cue images live under `public/demo-images/` and are referenced directly by `landmark.image_url`.
+   - Section 2 includes a small solar guide icon. It estimates the sun azimuth from the current local time, active cue coordinate, and target bearing, then places the icon roughly where the walker should expect the sun relative to their facing direction.
+   - Google Places venue photos are not used for the current demo path because they often return interiors, food, or unrelated venue shots rather than what a walking user sees from the street.
+   - Street View Static exterior images are the preferred demo asset source. The current route has 12 low-resolution Street View cue images cached under `public/demo-images/streetview/`.
+   - The Section 2 map inset is currently disabled because it competed with the exterior cue image. Route-map context stays in Section 1 while Section 2 focuses on what the walker should see.
+   - This is Section 2 of the UX: the primary visual cue steering surface with an animated action arrow and one-line maneuver instruction.
+
+5. **Destination panel**
+   - The destination reminder is collapsible.
+   - It keeps the final landmark visible without permanently consuming story-card space.
+   - This is Section 3 of the UX: destination recognition.
+
+6. **Remotion demo video**
+   - A standalone Remotion composition lives under `remotion/`.
+   - It imports `DEMO_ROUTE` from `lib/navigation.ts`, so the video uses the same 12 cue points, instructions, images, route geometry, and distance summary as the localhost demo.
+   - The composition renders at `1080x1920` portrait/mobile aspect ratio.
+   - Story flow: opening problem questions, full three-section app view, one-second cue walkthrough, rapid backtracking to the start, collapsed Section 1/Section 3 journey with 2.5 seconds per cue, the closing line, then an upcoming-enhancements page.
+   - During the slower Section 2 pass, timed feature callouts highlight the solar-position guide first, then the animated direction cue behavior. These callouts do not overlap.
+   - Render command: `npm run remotion:render`.
+   - Preview command: `npm run remotion:preview`.
+
+7. **Preview Journey**
+   - The play button starts an approximately 15-second route preview.
+   - The app auto-advances the cards and the overview map flies to each step while staying top-down.
+
+### Backend
+
+All runtime provider calls are handled by App Router Route Handlers.
+
+1. **`GET /api/navigation`**
+   - Returns the curated demo route.
+   - Useful for smoke tests and reliable demos.
+
+2. **`POST /api/navigation`**
+   - Input: origin and destination labels/coordinates.
+   - Process:
+     1. Fetches route data from the GrabMaps `navigation` endpoint first.
+     2. Prefers `profile=walking`.
+     3. Falls back to GrabMaps `direction` if `navigation` is unavailable.
+    4. Uses curated demo routing if GrabMaps walking data is unavailable; the app does not retry car routing for the walking product.
+     5. Decodes GrabMaps encoded route geometry.
+    6. Samples the route at every meaningful bearing change, then adds periodic straight-ahead confirmations only when they are visually distinct and reasonably spaced; the current curated demo has 12 cue points over roughly 1.1 km.
+     7. Calls GrabMaps Nearby around each cue point to identify human-visible landmarks.
+     8. Falls back to Grab POI keyword search if Nearby has no usable result.
+     9. Falls back to curated demo landmarks/images if providers fail.
+     10. Google Places photo APIs are kept for future enrichment, but the current demo does not use venue photos as cue-card imagery.
+   - Output: a `NavigationRoute`.
+   - Successful GrabMaps navigation/direction responses are cached under `.cache/grabmaps/` by request URL. If GrabMaps fails later, the route handler uses the last good cached route response before falling back to the curated demo route.
+
+3. **`GET /api/map-style`**
+   - Fetches `https://maps.grab.com/api/style.json`.
+   - Sends `Authorization: Bearer <GRABMAPS_API_KEY>`.
+   - Rewrites GrabMaps style resources to same-origin proxy URLs.
+   - Returns the style JSON to MapLibre.
+   - This avoids putting GrabMaps auth headers directly in browser map, sprite, glyph, or tile requests.
+   - `mode=cue` returns a simplified style by removing symbol layers, sprites, and glyph/font URLs. Sections 1 and 2 use this lean mode so the demo remains responsive and does not block on provider sprite/glyph failures.
+   - Successful upstream style responses are cached under `.cache/grabmaps/`; if GrabMaps later returns 503 or has a network failure, the route handler serves the last good cached style.
+
+4. **`GET /api/grabmaps/[...path]`**
+   - Proxies authenticated GrabMaps map resources under `https://maps.grab.com/api/maps/...`.
+   - Used for vector tiles, sprites, and glyphs referenced by the style JSON.
+   - Keeps the GrabMaps token server-side while still using GrabMaps tiles in the browser.
+   - Successful upstream responses are cached under `.cache/grabmaps/`; later failures fall back to the last good copy and include `X-GrabMaps-Cache: STALE`.
+
+5. **`GET /api/place-photo`**
+   - Proxies Google Places photo references.
+   - Keeps `GOOGLE_PLACES_API_KEY` server-side.
+   - Redirects to the actual Google-hosted image URL.
+   - Kept for future live enrichment; not used by the current demo cue cards because Places photos tend to be interior/venue content.
+
+6. **`GET /api/place-image`**
+   - Searches Google Places by cue-specific text plus optional lat/lng bias.
+   - Tries Find Place first, then Text Search.
+   - Redirects to a Google Places photo when one is available.
+   - Kept for future live enrichment, but the current demo does not depend on it at runtime.
+   - Google Street View Static is used by `scripts/download-streetview-cues.mjs` to cache low-resolution exterior cue images for the demo route.
+
+7. **`GET /api/google-static-map`**
+   - Builds a styled Google Static Maps basemap image for Section 1.
+   - Keeps `GOOGLE_PLACES_API_KEY` server-side.
+   - Accepts route geometry and marker coordinates only to set the viewport with `visible`.
+   - Does not draw Google markers or a Google route path; the app draws the single route/cue overlay itself.
+
+## Environment Variables
+
+Required locally and in Vercel:
 
 ```bash
-npm install
-npm run dev
+GRABMAPS_API_KEY=
+NEXT_PUBLIC_GRABMAPS_API_KEY=
+GOOGLE_PLACES_API_KEY=
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser. To test haptics and the compass, use a physical mobile device or simulator.
+Notes:
+
+- `GRABMAPS_API_KEY` is used by server-side route handlers.
+- `NEXT_PUBLIC_GRABMAPS_API_KEY` currently exists for compatibility, but the app should prefer server-side map/style APIs where possible.
+- `GOOGLE_PLACES_API_KEY` is used only by server-side API routes. It is not required for the current checked-in demo images.
+
+## PWA and Mobile Demo
+
+PWA assets live in `public/`:
+
+- `icon.svg`
+- `icon-192.png`
+- `icon-512.png`
+- `apple-touch-icon.png`
+- `manifest.json`
+
+`scripts/generate-icons.mjs` generates the PNG icons from a small programmatic GrabVision mark. The manifest is portrait-oriented and uses maskable icons so it behaves better on iOS and Android home screens.
+
+The laptop browser remains the primary reliable demo target. iPhone 13 Pro Max is supported as a secondary demo target once the app is deployed over HTTPS. iOS-specific compass/orientation features still need a dedicated implementation pass.
+
+## Demo Reliability Strategy
+
+The app has three route-data modes:
+
+1. **Live**
+   - GrabMaps directions succeeded.
+   - Landmark enrichment may include Grab POIs, Google Places, or curated images.
+
+2. **Demo**
+   - The curated Furama City Centre -> Maxwell Food Centre route.
+   - Used by `GET /api/navigation`.
+
+3. **Fallback**
+   - Returned by `POST /api/navigation` if live routing fails.
+   - Uses the curated demo route but marks the source as `fallback`.
+
+This protects the demo from network, provider, quota, or schema surprises.
+
+Important implementation detail: the current demo route is deliberately street-level. We are prioritizing Section 2 exterior landmark steering over indoor station micro-wayfinding until we have richer indoor landmark imagery/data.
+
+Demo image sourcing rule: use exterior, street-facing images whenever possible. Avoid Google Places venue-photo candidates for cue steering unless they clearly show the sidewalk or building frontage a user will actually see. For the current route, refresh the cached assets with:
+
+```bash
+set -a; source .env; set +a; node scripts/download-streetview-cues.mjs
+```
+
+Provider/API failures that look like GrabMaps defects should be captured under `docs/defects/` with reproduction steps and observed responses.
+
+## Core Data Schema
+
+The UI is driven by a `NavigationRoute`, which contains a route summary, origin/destination, route geometry, and ordered `NavStep[]`.
+
+```ts
+type Coordinate = {
+  lat: number;
+  lng: number;
+};
+
+type NavigationRoute = {
+  source: "live" | "demo" | "fallback";
+  route_name: string;
+  origin: {
+    label: string;
+    coordinate: Coordinate;
+  };
+  destination: {
+    label: string;
+    coordinate: Coordinate;
+  };
+  summary: {
+    distance_text: string;
+    duration_text: string;
+    confidence_text: string;
+  };
+  steps: NavStep[];
+  route_geometry: [number, number][];
+};
+```
+
+`route_geometry` uses MapLibre/GeoJSON coordinate order: `[lng, lat]`.
+
+### NavStep
+
+```ts
+type NavStep = {
+  step_index: number;
+  instruction: string;
+  distance_text: string;
+  duration_seconds: number;
+  target_bearing: number;
+  coordinate: Coordinate;
+  segment_geometry?: [number, number][];
+  landmark: {
+    name: string;
+    category: string;
+    image_url: string;
+    provider: "grab" | "google" | "curated";
+    coordinate?: Coordinate;
+    place_id?: string;
+    confidence?: number;
+  };
+  action_icon: "straight" | "turn-left" | "turn-right" | "arrive" | "depart";
+  is_junction: boolean;
+  eta_remaining: string;
+  source: "live" | "demo" | "fallback";
+};
+```
+
+### Field Rules
+
+- `coordinate`: the route-step coordinate used by story/map synchronization.
+- `segment_geometry`: optional route segment geometry in `[lng, lat]` order.
+- `target_bearing`: rotates the facing arrow and will later feed compass/sun orientation.
+- `landmark.image_url`: must always resolve to a visible image. For the current demo, prefer checked-in files under `public/demo-images/`.
+- `landmark.photo_query`: optional Google Places query for more photo-friendly landmark lookup.
+- `landmark.provider`: indicates whether the landmark came from Grab, Google, or curated demo data.
+- `action_icon`: maps to Lucide icons in `StoryCard`.
+- `source`: lets the UI and logs distinguish live data from demo/fallback behavior.
+
+## Current Verification
+
+Known passing checks:
+
+```bash
+npm run lint
+npm run typecheck
+npm run build
+```
+
+`npm run build` may require running outside the filesystem sandbox because Turbopack starts a CSS helper process that binds to a local port.
+
+Deployment and mobile demo notes live in `docs/DEPLOYMENT.md`. Current production URL: `https://grabvision.vercel.app`.
+
+Demo readiness planning lives in `docs/DEMO_PLAN.md`.
+
+## Known Gaps
+
+- iPhone-specific compass/sun orientation is not implemented yet.
+- iOS haptics via `navigator.vibrate` may not work reliably; this is browser/platform dependent.
+- GitHub CLI auth is currently invalid for `siva73-git`; pushing/deployment needs re-authentication.
+- Vercel CLI is not installed locally; deployment can proceed through the Vercel GitHub integration or by installing/logging into Vercel CLI.
+- Live route geometry from the current GrabMaps response may be sparse for walking; the curated route remains the reliable demo path.
