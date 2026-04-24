@@ -204,6 +204,8 @@ npm run build
 
 Deployment and mobile demo notes live in `docs/DEPLOYMENT.md`. Current production URL: `https://grabvision.vercel.app`.
 
+Demo readiness planning lives in `docs/DEMO_PLAN.md`.
+
 ## Known Gaps
 
 - iPhone-specific compass/sun orientation is not implemented yet.
