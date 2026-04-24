@@ -31,8 +31,8 @@ Known local status:
 - Vercel CLI is available through `npm exec vercel`.
 - Vercel CLI is authenticated as `roboticstb-3552`.
 - Production and Development env vars were added to Vercel.
-- Vercel Git connection is not active yet. `vercel git connect https://github.com/siva73-git/grabvision.git` failed because the Vercel account needs a GitHub Login Connection added in the Vercel UI.
-- Preview env vars need the connected Git repository before branch-scoped preview values can be added.
+- Vercel Git connection is active for `https://github.com/siva73-git/grabvision`.
+- Preview env vars are not yet added. Vercel CLI is still returning `git_branch_required` in non-interactive mode for all-preview variables, and rejects `main` because it is the Production branch. Add Preview variables in the Vercel dashboard if preview deployments are needed before branch-specific CLI setup is available.
 
 ## Required Vercel Environment Variables
 
@@ -66,20 +66,18 @@ Use `--public` instead of `--private` only if the hackathon rules and API-key hy
 
 ## Vercel Git Connection
 
-The local Vercel project is linked, but the Vercel account still needs a GitHub Login Connection before automatic Git deploys/previews can be enabled.
-
-After adding the GitHub connection in Vercel, run:
+The local Vercel project is linked and connected to GitHub:
 
 ```bash
 npm exec vercel -- git connect https://github.com/siva73-git/grabvision.git
 ```
 
-Then add Preview env vars for `main` if needed:
+Production and Development env vars are already set. If Preview deployments are needed, add these through the Vercel dashboard for the Preview environment:
 
 ```bash
-npm exec vercel -- env add GRABMAPS_API_KEY preview main
-npm exec vercel -- env add NEXT_PUBLIC_GRABMAPS_API_KEY preview main
-npm exec vercel -- env add GOOGLE_PLACES_API_KEY preview main
+GRABMAPS_API_KEY
+NEXT_PUBLIC_GRABMAPS_API_KEY
+GOOGLE_PLACES_API_KEY
 ```
 
 ## Suggested Vercel Flow
