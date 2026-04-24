@@ -38,9 +38,14 @@ type RawStep = {
 };
 
 const BRAND_KEYWORDS = [
-  "MRT Exit",
-  "Lau Pa Sat",
-  "CapitaSpring",
+  "Furama City Centre",
+  "Maxwell Food Centre",
+  "People's Park Centre",
+  "Chinatown MRT",
+  "Pagoda Street",
+  "Trengganu Street",
+  "Ann Siang Road",
+  "CPF Maxwell",
   "Starbucks",
   "7-Eleven",
   "OCBC",
@@ -53,8 +58,12 @@ const BRAND_KEYWORDS = [
 const CURATED_IMAGES: Record<string, string> = {
   capitaspring:
     "https://images.unsplash.com/photo-1565967511849-76a60a516170?q=80&w=1400&auto=format&fit=crop",
-  "lau pa sat":
-    "https://images.unsplash.com/photo-1542181961-9590d0c79dab?q=80&w=1400&auto=format&fit=crop",
+  "maxwell food centre":
+    "https://images.unsplash.com/photo-1555396273-367ea4eb4db5?q=80&w=1400&auto=format&fit=crop",
+  furama:
+    "https://images.unsplash.com/photo-1566073771259-6a8506099945?q=80&w=1400&auto=format&fit=crop",
+  chinatown:
+    "https://images.unsplash.com/photo-1565967511849-76a60a516170?q=80&w=1400&auto=format&fit=crop",
   mrt: "https://images.unsplash.com/photo-1544620347-c4fd4a3d5957?q=80&w=1400&auto=format&fit=crop",
   default:
     "https://images.unsplash.com/photo-1518005020951-eccb494ad742?q=80&w=1400&auto=format&fit=crop",
@@ -117,15 +126,18 @@ async function buildLiveRoute(
     throw new Error("Missing GRABMAPS_API_KEY");
   }
 
-  const direction = await fetchGrabDirection(origin.coordinate, destination.coordinate, grabKey);
+  const direction = await fetchGrabRoute(origin.coordinate, destination.coordinate, grabKey);
   const rawSteps = extractSteps(direction);
   const routeGeometry = extractGeometry(direction, origin.coordinate, destination.coordinate);
   const totalDistance = Number(direction?.routes?.[0]?.distance ?? sum(rawSteps, "distance"));
   const totalDuration = Number(direction?.routes?.[0]?.duration ?? sum(rawSteps, "duration"));
 
-  const usableSteps = rawSteps.length > 0 ? rawSteps : createFallbackRawSteps(origin.coordinate, destination.coordinate);
+  const usableSteps =
+    rawSteps.length > 0
+      ? rawSteps
+      : createGeometryRawSteps(routeGeometry, totalDuration);
   const steps = await Promise.all(
-    usableSteps.slice(0, 6).map((step, index) =>
+    usableSteps.map((step, index) =>
       enrichStep(step, index, usableSteps.length, grabKey, totalDuration),
     ),
   );
@@ -145,6 +157,32 @@ async function buildLiveRoute(
   };
 }
 
+async function fetchGrabRoute(origin: Coordinate, destination: Coordinate, apiKey: string) {
+  const navigation = await fetchGrabNavigation(origin, destination, apiKey);
+  if (navigation) return navigation;
+  return fetchGrabDirection(origin, destination, apiKey);
+}
+
+async function fetchGrabNavigation(origin: Coordinate, destination: Coordinate, apiKey: string) {
+  const request = new URL("https://maps.grab.com/api/v1/maps/eta/v1/navigation");
+  request.searchParams.set("requestID", `grabvision-${Date.now()}`);
+  request.searchParams.append("coordinates", `${origin.lng},${origin.lat}`);
+  request.searchParams.append("coordinates", `${destination.lng},${destination.lat}`);
+  request.searchParams.set("profile", "walking");
+  request.searchParams.set("overview", "full");
+
+  const response = await fetch(request, {
+    headers: { Authorization: `Bearer ${apiKey}` },
+    cache: "no-store",
+  });
+
+  if (!response.ok) return undefined;
+
+  const data = await response.json();
+  const code = String(asRecord(data)?.code ?? "").toLowerCase();
+  return code === "ok" ? data : undefined;
+}
+
 async function fetchGrabDirection(origin: Coordinate, destination: Coordinate, apiKey: string) {
   const request = new URL("https://maps.grab.com/api/v1/maps/eta/v1/direction");
   request.searchParams.append("coordinates", `${origin.lng},${origin.lat}`);
@@ -152,21 +190,13 @@ async function fetchGrabDirection(origin: Coordinate, destination: Coordinate, a
   request.searchParams.set("profile", "walking");
   request.searchParams.set("overview", "full");
 
-  let response = await fetch(request, {
+  const response = await fetch(request, {
     headers: { Authorization: `Bearer ${apiKey}` },
     cache: "no-store",
   });
 
   if (!response.ok) {
-    request.searchParams.set("profile", "driving");
-    response = await fetch(request, {
-      headers: { Authorization: `Bearer ${apiKey}` },
-      cache: "no-store",
-    });
-  }
-
-  if (!response.ok) {
-    throw new Error(`Grab directions failed: ${response.status}`);
+    throw new Error(`Grab walking directions failed: ${response.status}`);
   }
 
   return response.json();
@@ -186,6 +216,11 @@ function extractGeometry(direction: JsonRecord, origin: Coordinate, destination:
   const route = firstRoute(direction);
   const geometry = route?.geometry;
   const coordinates = asRecord(geometry)?.coordinates ?? geometry;
+
+  if (typeof coordinates === "string") {
+    return decodePolyline(coordinates, 6);
+  }
+
   if (Array.isArray(coordinates) && coordinates.length > 0) {
     return coordinates
       .filter((point) => Array.isArray(point) && point.length >= 2)
@@ -198,30 +233,31 @@ function extractGeometry(direction: JsonRecord, origin: Coordinate, destination:
   ];
 }
 
-function createFallbackRawSteps(origin: Coordinate, destination: Coordinate): RawStep[] {
-  return [
-    {
-      instruction: "Start walking toward the landmark ahead",
-      distance: 120,
-      duration: 120,
-      location: [origin.lng, origin.lat],
-    },
-    {
-      instruction: "Continue along the main pedestrian route",
-      distance: 260,
-      duration: 240,
-      location: [
-        (origin.lng + destination.lng) / 2,
-        (origin.lat + destination.lat) / 2,
-      ],
-    },
-    {
-      instruction: "Arrive at your destination",
-      distance: 80,
-      duration: 80,
-      location: [destination.lng, destination.lat],
-    },
-  ];
+function createGeometryRawSteps(geometry: [number, number][], totalDuration: number): RawStep[] {
+  const samples = sampleRouteGeometry(geometry, 25, 28);
+  const fallbackDuration = totalDuration / Math.max(samples.length, 1);
+
+  return samples.map((sample, index) => {
+    const next = samples[index + 1] ?? sample;
+    return {
+      instruction:
+        index === 0
+          ? "Start walking from this point"
+          : index === samples.length - 1
+            ? "Arrive at your destination"
+            : "Continue to the next visible landmark",
+      distance: sample.distanceToNext || 55,
+      duration: fallbackDuration,
+      location: sample.point,
+      maneuver: {
+        bearing_after: bearingBetween(
+          { lng: sample.point[0], lat: sample.point[1] },
+          { lng: next.point[0], lat: next.point[1] },
+        ),
+      },
+      geometry: [sample.point, next.point],
+    };
+  });
 }
 
 async function enrichStep(
@@ -232,9 +268,10 @@ async function enrichStep(
   totalDuration: number,
 ): Promise<NavStep> {
   const coordinate = extractStepCoordinate(rawStep, DEMO_ROUTE.steps[index]?.coordinate ?? DEMO_ORIGIN.coordinate);
-  const nextCoordinate =
-    DEMO_ROUTE.steps[index + 1]?.coordinate ??
-    DEMO_ROUTE.destination.coordinate;
+  const nextPoint = extractStepGeometry(rawStep)?.at(-1);
+  const nextCoordinate = nextPoint
+    ? { lng: nextPoint[0], lat: nextPoint[1] }
+    : DEMO_ROUTE.steps[index + 1]?.coordinate ?? DEMO_ROUTE.destination.coordinate;
   const targetBearing =
     Number(rawStep.maneuver?.bearing_after) || bearingBetween(coordinate, nextCoordinate);
   const distance = Number(rawStep.distance ?? DEMO_ROUTE.steps[index]?.distance_text.replace("m", ""));
@@ -288,6 +325,9 @@ async function findBestLandmark(
   grabKey: string,
   index: number,
 ): Promise<NavStep["landmark"]> {
+  const nearbyLandmark = await searchGrabNearby(coordinate, grabKey);
+  if (nearbyLandmark) return nearbyLandmark;
+
   const grabLandmark = await searchGrabPoi(coordinate, rawStep, grabKey);
   if (grabLandmark?.image_url) return grabLandmark;
 
@@ -298,6 +338,39 @@ async function findBestLandmark(
     ...DEMO_ROUTE.steps[index % DEMO_ROUTE.steps.length].landmark,
     provider: "curated",
   };
+}
+
+async function searchGrabNearby(coordinate: Coordinate, apiKey: string) {
+  const request = new URL("https://maps.grab.com/api/v1/maps/place/v2/nearby");
+  request.searchParams.set("location", `${coordinate.lat},${coordinate.lng}`);
+  request.searchParams.set("radius", "0.12");
+  request.searchParams.set("limit", "12");
+  request.searchParams.set("rankBy", "distance");
+
+  try {
+    const response = await fetch(request, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+      cache: "no-store",
+    });
+    if (!response.ok) return undefined;
+    const data = asRecord(await response.json());
+    const places = data?.places;
+    const place = Array.isArray(places) ? rankPlaces(places.filter(isRecord))?.[0] : undefined;
+    if (!place) return undefined;
+
+    const name = String(place.name ?? "Nearby GrabMaps POI");
+    return {
+      name,
+      category: grabCategoryLabel(place),
+      image_url: curatedImageFor(name),
+      provider: "grab" as const,
+      coordinate: parsePlaceCoordinate(place),
+      place_id: String(place.poi_id ?? place.place_id ?? place.id ?? ""),
+      confidence: scorePlace(place),
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 async function searchGrabPoi(coordinate: Coordinate, rawStep: RawStep, apiKey: string) {
@@ -411,6 +484,138 @@ function parsePlaceCoordinate(place: JsonRecord): Coordinate | undefined {
   const lat = Number(location?.lat ?? location?.latitude);
   const lng = Number(location?.lng ?? location?.longitude);
   return Number.isFinite(lat) && Number.isFinite(lng) ? { lat, lng } : undefined;
+}
+
+function grabCategoryLabel(place: JsonRecord) {
+  const categories = place.categories;
+  if (Array.isArray(categories)) {
+    const first = categories.map(asRecord).find(Boolean);
+    const category = String(first?.category_name ?? "");
+    if (category) return category.split("::").at(-1) ?? category;
+  }
+
+  return String(place.business_type ?? place.place_type ?? "GrabMaps POI");
+}
+
+function decodePolyline(encoded: string, precision: number): [number, number][] {
+  let index = 0;
+  let lat = 0;
+  let lng = 0;
+  const factor = 10 ** precision;
+  const coordinates: [number, number][] = [];
+
+  while (index < encoded.length) {
+    let result = 0;
+    let shift = 0;
+    let byte = 0;
+
+    do {
+      byte = encoded.charCodeAt(index++) - 63;
+      result |= (byte & 0x1f) << shift;
+      shift += 5;
+    } while (byte >= 0x20);
+
+    lat += result & 1 ? ~(result >> 1) : result >> 1;
+    result = 0;
+    shift = 0;
+
+    do {
+      byte = encoded.charCodeAt(index++) - 63;
+      result |= (byte & 0x1f) << shift;
+      shift += 5;
+    } while (byte >= 0x20);
+
+    lng += result & 1 ? ~(result >> 1) : result >> 1;
+    coordinates.push([lng / factor, lat / factor]);
+  }
+
+  return coordinates;
+}
+
+function sampleRouteGeometry(
+  geometry: [number, number][],
+  spacingMeters: number,
+  turnThresholdDegrees: number,
+) {
+  if (geometry.length <= 2) {
+    return geometry.map((point) => ({ point, distanceToNext: 0 }));
+  }
+
+  const samples: Array<{ point: [number, number]; distanceToNext: number }> = [
+    { point: geometry[0], distanceToNext: 0 },
+  ];
+  let distanceSinceLast = 0;
+  let lastBearing = bearingBetween(
+    { lng: geometry[0][0], lat: geometry[0][1] },
+    { lng: geometry[1][0], lat: geometry[1][1] },
+  );
+
+  for (let index = 1; index < geometry.length; index += 1) {
+    let previous = geometry[index - 1];
+    const current = geometry[index];
+    let segmentDistance = distanceMeters(previous, current);
+    const currentBearing = bearingBetween(
+      { lng: previous[0], lat: previous[1] },
+      { lng: current[0], lat: current[1] },
+    );
+    const turnDelta = bearingDelta(lastBearing, currentBearing);
+    const shouldCueTurn =
+      index > 1 &&
+      turnDelta >= turnThresholdDegrees &&
+      distanceSinceLast >= spacingMeters * 0.35 &&
+      distanceMeters(samples[samples.length - 1].point, previous) >= spacingMeters * 0.35;
+
+    if (shouldCueTurn) {
+      samples[samples.length - 1].distanceToNext = distanceSinceLast;
+      samples.push({ point: previous, distanceToNext: 0 });
+      distanceSinceLast = 0;
+    }
+
+    while (distanceSinceLast + segmentDistance >= spacingMeters) {
+      const remaining = spacingMeters - distanceSinceLast;
+      const ratio = segmentDistance === 0 ? 0 : remaining / segmentDistance;
+      const interpolated: [number, number] = [
+        previous[0] + (current[0] - previous[0]) * ratio,
+        previous[1] + (current[1] - previous[1]) * ratio,
+      ];
+
+      samples[samples.length - 1].distanceToNext = spacingMeters;
+      samples.push({ point: interpolated, distanceToNext: 0 });
+      previous = interpolated;
+      segmentDistance = distanceMeters(previous, current);
+      distanceSinceLast = 0;
+    }
+
+    distanceSinceLast += segmentDistance;
+    lastBearing = currentBearing;
+  }
+
+  const last = geometry[geometry.length - 1];
+  const currentLast = samples[samples.length - 1].point;
+  if (currentLast[0] !== last[0] || currentLast[1] !== last[1]) {
+    samples[samples.length - 1].distanceToNext = distanceSinceLast;
+    samples.push({ point: last, distanceToNext: 0 });
+  }
+
+  return samples;
+}
+
+function bearingDelta(a: number, b: number) {
+  const delta = Math.abs(a - b) % 360;
+  return delta > 180 ? 360 - delta : delta;
+}
+
+function distanceMeters(from: [number, number], to: [number, number]) {
+  const earthRadius = 6371000;
+  const toRad = Math.PI / 180;
+  const lat1 = from[1] * toRad;
+  const lat2 = to[1] * toRad;
+  const deltaLat = (to[1] - from[1]) * toRad;
+  const deltaLng = (to[0] - from[0]) * toRad;
+  const a =
+    Math.sin(deltaLat / 2) ** 2 +
+    Math.cos(lat1) * Math.cos(lat2) * Math.sin(deltaLng / 2) ** 2;
+  return earthRadius * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
 function firstRoute(direction: JsonRecord): JsonRecord | undefined {
