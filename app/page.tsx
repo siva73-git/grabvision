@@ -1,65 +1,189 @@
-import Image from "next/image";
+'use client';
+
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { AnimatePresence } from 'framer-motion';
+import { LocateFixed, Play, RefreshCw, Search } from 'lucide-react';
+import RouteMap from '@/components/RouteMap';
+import StoryCard from '@/components/StoryCard';
+import { DEMO_DESTINATION, DEMO_ORIGIN, DEMO_ROUTE, NavigationRoute } from '@/lib/navigation';
 
 export default function Home() {
+  const [route, setRoute] = useState<NavigationRoute>(DEMO_ROUTE);
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const [origin, setOrigin] = useState(DEMO_ORIGIN.label);
+  const [destination, setDestination] = useState(DEMO_DESTINATION.label);
+  const [isLoading, setIsLoading] = useState(false);
+  const [isPreviewing, setIsPreviewing] = useState(false);
+  const currentStep = route.steps[currentIndex] ?? route.steps[0];
+  const progress = useMemo(
+    () => Math.round(((currentIndex + 1) / route.steps.length) * 100),
+    [currentIndex, route.steps.length],
+  );
+
+  const triggerHaptic = useCallback(() => {
+    if (typeof navigator !== 'undefined' && navigator.vibrate) {
+      navigator.vibrate(50);
+    }
+  }, []);
+
+  const loadNavigation = useCallback(async (demo = false) => {
+    setIsLoading(true);
+    try {
+      const response = await fetch('/api/navigation', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          demo,
+          origin: { label: origin, coordinate: DEMO_ORIGIN.coordinate },
+          destination: { label: destination, coordinate: DEMO_DESTINATION.coordinate },
+        }),
+      });
+      const data = (await response.json()) as NavigationRoute;
+      setRoute(data);
+      setCurrentIndex(0);
+    } finally {
+      setIsLoading(false);
+    }
+  }, [destination, origin]);
+
+  useEffect(() => {
+    if (!isPreviewing) return;
+
+    const interval = window.setInterval(() => {
+      setCurrentIndex((index) => {
+        if (index >= route.steps.length - 1) {
+          window.clearInterval(interval);
+          window.setTimeout(() => setIsPreviewing(false), 800);
+          return index;
+        }
+        triggerHaptic();
+        return index + 1;
+      });
+    }, Math.max(2200, Math.floor(15000 / route.steps.length)));
+
+    return () => window.clearInterval(interval);
+  }, [isPreviewing, route.steps.length, triggerHaptic]);
+
+  const handleNext = () => {
+    if (currentIndex < route.steps.length - 1) {
+      triggerHaptic();
+      setCurrentIndex((prev) => prev + 1);
+    }
+  };
+
+  const handlePrev = () => {
+    if (currentIndex > 0) {
+      triggerHaptic();
+      setCurrentIndex((prev) => prev - 1);
+    }
+  };
+
+  // Allow tapping on the sides to advance/go back as a fallback for dragging
+  const handleScreenTap = (e: React.MouseEvent) => {
+    const clickX = e.clientX;
+    const screenWidth = window.innerWidth;
+    if (clickX < screenWidth * 0.3) {
+      handlePrev();
+    } else if (clickX > screenWidth * 0.7) {
+      handleNext();
+    }
+  };
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
+    <main className="fixed inset-0 overflow-hidden bg-[#f5f7f4] text-[#0b1f17]">
+      <section className="grid h-full grid-rows-[auto_minmax(0,38%)_minmax(0,1fr)]">
+        <div className="z-30 border-b border-black/5 bg-white px-4 pb-3 pt-[calc(env(safe-area-inset-top)+1rem)] shadow-sm">
+          <div className="mx-auto flex max-w-5xl items-center justify-between gap-3">
+            <div>
+              <div className="text-xs font-black uppercase text-[#00B14F]">GrabVision</div>
+              <div className="text-xl font-black">Walk by what you see</div>
+            </div>
+            <button
+              type="button"
+              className="grid h-11 w-11 place-items-center rounded-full bg-[#00B14F] text-white shadow-sm"
+              onClick={() => loadNavigation(false)}
+              aria-label="Refresh live route"
             >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
+              <RefreshCw className={`h-5 w-5 ${isLoading ? 'animate-spin' : ''}`} />
+            </button>
+          </div>
+
+          <div className="mx-auto mt-3 grid max-w-5xl gap-2 sm:grid-cols-[1fr_1fr_auto]">
+            <label className="flex items-center gap-2 rounded-lg bg-[#f1f5f2] px-3 py-2">
+              <LocateFixed className="h-4 w-4 text-[#00B14F]" />
+              <input
+                value={origin}
+                onChange={(event) => setOrigin(event.target.value)}
+                className="min-w-0 flex-1 bg-transparent text-sm font-semibold outline-none"
+                aria-label="Origin"
+              />
+            </label>
+            <label className="flex items-center gap-2 rounded-lg bg-[#f1f5f2] px-3 py-2">
+              <Search className="h-4 w-4 text-[#00B14F]" />
+              <input
+                value={destination}
+                onChange={(event) => setDestination(event.target.value)}
+                className="min-w-0 flex-1 bg-transparent text-sm font-semibold outline-none"
+                aria-label="Destination"
+              />
+            </label>
+            <button
+              type="button"
+              onClick={() => loadNavigation(false)}
+              className="rounded-lg bg-[#0b1f17] px-4 py-2 text-sm font-black text-white"
             >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+              Route
+            </button>
+          </div>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
+
+        <div className="relative min-h-0">
+          <RouteMap route={route} currentStep={currentStep} previewing={isPreviewing} />
+          <div className="absolute bottom-3 left-3 right-3 flex items-center justify-between rounded-lg bg-white/95 px-4 py-3 shadow-lg backdrop-blur">
+            <div>
+              <div className="text-xs font-bold uppercase text-[#5b6f66]">{route.summary.confidence_text}</div>
+              <div className="text-lg font-black">{route.summary.distance_text} · {route.summary.duration_text}</div>
+            </div>
+            <button
+              type="button"
+              className="grid h-11 w-11 place-items-center rounded-full bg-[#00B14F] text-white"
+              onClick={() => {
+                setCurrentIndex(0);
+                setIsPreviewing(true);
+              }}
+              aria-label="Preview journey"
+            >
+              <Play className="h-5 w-5 fill-current" />
+            </button>
+          </div>
+        </div>
+
+        <div className="relative min-h-0 touch-none select-none pb-[env(safe-area-inset-bottom)]" onClick={handleScreenTap}>
+          <div className="absolute left-0 right-0 top-0 z-20 flex gap-1 px-3 pt-3 pointer-events-none">
+            {route.steps.map((_, idx) => (
+              <div key={idx} className="h-1 flex-1 overflow-hidden rounded-full bg-black/10">
+                <div 
+                  className={`h-full bg-[#00B14F] transition-all duration-300 ${idx <= currentIndex ? 'w-full' : 'w-0'}`} 
+                />
+              </div>
+            ))}
+          </div>
+
+          <div className="absolute right-4 top-6 z-20 rounded-full bg-white/90 px-3 py-1 text-xs font-black text-[#0b1f17] shadow">
+            {progress}%
+          </div>
+
+          <AnimatePresence mode="popLayout" initial={false}>
+            <StoryCard 
+              key={currentStep.step_index}
+              step={currentStep} 
+              isActive={true}
+              onSwipeLeft={handleNext}
+              onSwipeRight={handlePrev}
             />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+          </AnimatePresence>
         </div>
-      </main>
-    </div>
+      </section>
+    </main>
   );
 }

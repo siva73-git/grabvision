@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="GrabVision icon">
+  <rect width="512" height="512" rx="112" fill="#00B14F"/>
+  <path d="M142 366c46-38 88-76 72-119-9-24-10-48 9-62 23-17 67 18 101 41 20 14 40 24 59 10" fill="none" stroke="#fff" stroke-width="28" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="348" cy="176" r="54" fill="#fff"/>
+  <circle cx="348" cy="176" r="27" fill="#00B14F"/>
+</svg>
