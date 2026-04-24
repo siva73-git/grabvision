@@ -1,5 +1,6 @@
 'use client';
 
+import { useEffect, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
 import {
   ArrowLeft,
@@ -8,6 +9,7 @@ import {
   CircleDot,
   Flag,
   Navigation,
+  Sun,
 } from 'lucide-react';
 import { NavigationRoute, NavStep } from '@/lib/navigation';
 
@@ -21,7 +23,7 @@ interface StoryCardProps {
 
 export default function StoryCard({ route, step, isActive, onSwipeLeft, onSwipeRight }: StoryCardProps) {
   const actionLabel = getActionLabel(step.action_icon);
-  void route;
+  const remainingDistance = getRemainingDistanceText(route, step);
 
   return (
     <motion.div
@@ -44,6 +46,7 @@ export default function StoryCard({ route, step, isActive, onSwipeLeft, onSwipeR
     >
       <CuePhotoFallback step={step} />
       <CueLabels step={step} />
+      <SolarGuide step={step} />
       <div className="absolute inset-0 bg-gradient-to-b from-black/5 via-transparent to-black/82" />
       <div className="absolute left-[33%] top-[31%] z-20 -translate-x-1/2">
         <motion.div
@@ -65,7 +68,7 @@ export default function StoryCard({ route, step, isActive, onSwipeLeft, onSwipeR
             {renderActionIcon(step.action_icon, "h-5 w-5")}
           </div>
           <div>
-            <div className="text-sm font-black">{step.distance_text}</div>
+            <div className="text-sm font-black">{remainingDistance}</div>
             <div className="flex items-center gap-1 text-xs font-semibold opacity-90">
               <Navigation className="h-3.5 w-3.5" />
               {step.eta_remaining} remaining
@@ -122,6 +125,33 @@ function CueLabels({ step }: { step: NavStep }) {
   );
 }
 
+function SolarGuide({ step }: { step: NavStep }) {
+  const [now, setNow] = useState(() => new Date());
+  const solarPosition = useMemo(() => getSolarGuidePosition(step, now), [now, step]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(new Date()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  if (solarPosition.isNight) return null;
+
+  return (
+    <div
+      className="pointer-events-none absolute z-30 grid h-8 w-8 place-items-center rounded-full bg-amber-300/92 text-[#4b3510] shadow-[0_0_22px_rgba(251,191,36,0.55)] ring-2 ring-white/80"
+      style={{
+        left: `${solarPosition.x}%`,
+        top: `${solarPosition.y}%`,
+        transform: "translate(-50%, -50%)",
+      }}
+      aria-label={solarPosition.label}
+      title={solarPosition.label}
+    >
+      <Sun className="h-[18px] w-[18px]" />
+    </div>
+  );
+}
+
 const swipeConfidenceThreshold = 10000;
 const swipePower = (offset: number, velocity: number) => {
   return Math.abs(offset) * velocity;
@@ -168,6 +198,119 @@ function getArrowAnimation(action: NavStep["action_icon"]) {
     default:
       return { y: [-8, 0] };
   }
+}
+
+function getRemainingDistanceText(route: NavigationRoute, step: NavStep) {
+  const currentIndex = route.steps.findIndex((candidate) => candidate.step_index === step.step_index);
+  if (currentIndex < 0) return step.distance_text;
+
+  const meters = route.steps
+    .slice(currentIndex)
+    .reduce((total, candidate) => total + distanceTextToMeters(candidate.distance_text), 0);
+
+  return formatRemainingDistance(meters || distanceTextToMeters(step.distance_text));
+}
+
+function distanceTextToMeters(distanceText: string) {
+  const value = Number(distanceText.replace(/[^0-9.]/g, ""));
+  if (!Number.isFinite(value)) return 0;
+
+  return distanceText.toLowerCase().includes("km") ? value * 1000 : value;
+}
+
+function formatRemainingDistance(meters: number) {
+  if (meters >= 1000) return `${(meters / 1000).toFixed(1)}km`;
+  return `${Math.max(10, Math.round(meters / 10) * 10)}m`;
+}
+
+function getSolarGuidePosition(step: NavStep, date: Date) {
+  const coordinate = step.landmark.coordinate ?? step.coordinate;
+  const sun = getApproximateSolarPosition(date, coordinate.lat, coordinate.lng);
+  const relativeBearing = normalizeDegrees(sun.azimuth - step.target_bearing);
+  const relativeRadians = (relativeBearing * Math.PI) / 180;
+  const side = Math.sin(relativeRadians);
+  const ahead = Math.cos(relativeRadians);
+  const isBehind = ahead < -0.28;
+  const altitudeFactor = clamp((sun.altitude + 6) / 78, 0, 1);
+  const x = clamp(50 + side * (isBehind ? 42 : 34), 9, 91);
+  const y = clamp(
+    isBehind ? 30 - altitudeFactor * 6 : 28 - altitudeFactor * 18,
+    8,
+    33,
+  );
+
+  return {
+    x,
+    y,
+    isNight: sun.altitude < -6,
+    label: `Approximate sun position: ${sun.label}`,
+  };
+}
+
+function getApproximateSolarPosition(date: Date, lat: number, lng: number) {
+  const dayOfYear = getDayOfYear(date);
+  const hour = date.getHours() + date.getMinutes() / 60 + date.getSeconds() / 3600;
+  const gamma = (2 * Math.PI / 365) * (dayOfYear - 1 + (hour - 12) / 24);
+  const equationOfTime =
+    229.18 *
+    (0.000075 +
+      0.001868 * Math.cos(gamma) -
+      0.032077 * Math.sin(gamma) -
+      0.014615 * Math.cos(2 * gamma) -
+      0.040849 * Math.sin(2 * gamma));
+  const declination =
+    0.006918 -
+    0.399912 * Math.cos(gamma) +
+    0.070257 * Math.sin(gamma) -
+    0.006758 * Math.cos(2 * gamma) +
+    0.000907 * Math.sin(2 * gamma) -
+    0.002697 * Math.cos(3 * gamma) +
+    0.00148 * Math.sin(3 * gamma);
+  const timezoneOffsetMinutes = -date.getTimezoneOffset();
+  const trueSolarTime = positiveModulo(
+    hour * 60 + equationOfTime + 4 * lng - timezoneOffsetMinutes,
+    1440,
+  );
+  const hourAngle = ((trueSolarTime / 4 - 180) * Math.PI) / 180;
+  const latRadians = (lat * Math.PI) / 180;
+  const altitudeRadians = Math.asin(
+    Math.sin(latRadians) * Math.sin(declination) +
+      Math.cos(latRadians) * Math.cos(declination) * Math.cos(hourAngle),
+  );
+  const azimuthRadians = Math.atan2(
+    Math.sin(hourAngle),
+    Math.cos(hourAngle) * Math.sin(latRadians) - Math.tan(declination) * Math.cos(latRadians),
+  );
+  const azimuth = normalizeDegrees((azimuthRadians * 180) / Math.PI + 180);
+  const altitude = (altitudeRadians * 180) / Math.PI;
+
+  return {
+    azimuth,
+    altitude,
+    label: cardinalLabel(azimuth),
+  };
+}
+
+function getDayOfYear(date: Date) {
+  const start = new Date(date.getFullYear(), 0, 0);
+  return Math.floor((date.getTime() - start.getTime()) / 86_400_000);
+}
+
+function normalizeDegrees(value: number) {
+  return positiveModulo(value + 180, 360) - 180;
+}
+
+function positiveModulo(value: number, divisor: number) {
+  return ((value % divisor) + divisor) % divisor;
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function cardinalLabel(azimuth: number) {
+  const labels = ["north", "northeast", "east", "southeast", "south", "southwest", "west", "northwest"];
+  return labels[Math.round(azimuth / 45) % labels.length];
 }
 
 function getScene(step: NavStep) {
@@ -230,6 +373,18 @@ function getScene(step: NavStep) {
       ],
       sideLabel: "Hill turn",
       visualTarget: "Descend toward Maxwell",
+    };
+  }
+
+  if (text.includes("kadayanallur")) {
+    return {
+      background: "bg-[radial-gradient(circle_at_48%_16%,#effff6_0,#d6efe3_35%,#4d6259_100%)]",
+      labels: [
+        { text: "Kadayanallur St", className: "left-[8%] top-[28%]" },
+        { text: "Food Centre", className: "right-[14%] top-[40%]" },
+      ],
+      sideLabel: "Final corner",
+      visualTarget: "Turn toward the frontage",
     };
   }
 

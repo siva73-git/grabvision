@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ChevronUp } from "lucide-react";
+import maplibregl, { GeoJSONSource, Map } from "maplibre-gl";
 import { NavigationRoute, NavStep } from "@/lib/navigation";
 
 const MAP_WIDTH = 900;
@@ -15,12 +16,224 @@ type RouteMapProps = {
 };
 
 export default function RouteMap({ route, currentStep, previewing, onCollapse }: RouteMapProps) {
-  void previewing;
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const mapRef = useRef<Map | null>(null);
+  const currentStepRef = useRef(currentStep);
+  const [mapReady, setMapReady] = useState(false);
+  const [mapFailed, setMapFailed] = useState(false);
+  const [showFallbackSketch, setShowFallbackSketch] = useState(false);
   const viewport = getStaticMapViewport(route.route_geometry);
 
+  useEffect(() => {
+    currentStepRef.current = currentStep;
+  }, [currentStep]);
+
+  useEffect(() => {
+    if (!containerRef.current || mapRef.current) return;
+
+    let cancelled = false;
+    const fallbackTimer = window.setTimeout(() => {
+      if (!cancelled) setShowFallbackSketch(true);
+    }, 1400);
+
+    async function initMap() {
+      setMapFailed(false);
+      setShowFallbackSketch(false);
+      const style = await fetch("/api/map-style?theme=basic").then((response) => {
+        if (!response.ok) throw new Error("GrabMaps style unavailable");
+        return response.json();
+      });
+
+      if (cancelled || !containerRef.current) return;
+
+      const map = new maplibregl.Map({
+        container: containerRef.current,
+        style,
+        center: [route.origin.coordinate.lng, route.origin.coordinate.lat],
+        zoom: 16,
+        pitch: 0,
+        bearing: 0,
+        attributionControl: { compact: true },
+      });
+
+      mapRef.current = map;
+      map.on("styleimagemissing", (event) => {
+        if (map.hasImage(event.id)) return;
+        map.addImage(event.id, {
+          width: 1,
+          height: 1,
+          data: new Uint8Array(4),
+        });
+      });
+      const resizeObserver = new ResizeObserver(() => map.resize());
+      resizeObserver.observe(containerRef.current);
+      requestAnimationFrame(() => map.resize());
+
+      const setupRouteLayers = () => {
+        if (cancelled) return;
+        map.resize();
+
+        addOrUpdateSource(map, "route", routeLine(route.route_geometry));
+        addOrUpdateSource(map, "route-cues", cueCollection(route.steps));
+        addOrUpdateSource(map, "current-cue", cueFeature(route.steps[0] ?? currentStepRef.current));
+        addOrUpdateSource(map, "route-endpoints", endpointCollection(route));
+
+        if (!map.getLayer("route-shadow")) {
+          map.addLayer({
+            id: "route-shadow",
+            type: "line",
+            source: "route",
+            layout: { "line-cap": "round", "line-join": "round" },
+            paint: {
+              "line-color": "#ffffff",
+              "line-opacity": 0.95,
+              "line-width": 13,
+            },
+          });
+        }
+
+        if (!map.getLayer("route-line")) {
+          map.addLayer({
+            id: "route-line",
+            type: "line",
+            source: "route",
+            layout: { "line-cap": "round", "line-join": "round" },
+            paint: {
+              "line-color": "#1677ff",
+              "line-width": 7,
+            },
+          });
+        }
+
+        if (!map.getLayer("route-cue-dots")) {
+          map.addLayer({
+            id: "route-cue-dots",
+            type: "circle",
+            source: "route-cues",
+            paint: {
+              "circle-radius": 4,
+              "circle-color": "#ffffff",
+              "circle-stroke-color": "#1677ff",
+              "circle-stroke-width": 2,
+            },
+          });
+        }
+
+        if (!map.getLayer("current-cue-dot")) {
+          map.addLayer({
+            id: "current-cue-dot",
+            type: "circle",
+            source: "current-cue",
+            paint: {
+              "circle-radius": 7,
+              "circle-color": "#00B14F",
+              "circle-stroke-color": "#ffffff",
+              "circle-stroke-width": 3,
+            },
+          });
+        }
+
+        if (!map.getLayer("endpoint-dots")) {
+          map.addLayer({
+            id: "endpoint-dots",
+            type: "circle",
+            source: "route-endpoints",
+            paint: {
+              "circle-radius": 8,
+              "circle-color": ["get", "color"],
+              "circle-stroke-color": "#ffffff",
+              "circle-stroke-width": 3,
+            },
+          });
+        }
+
+        map.fitBounds(routeBounds(route.route_geometry), {
+          padding: { top: 36, right: 40, bottom: 70, left: 40 },
+          duration: 0,
+          pitch: 0,
+          bearing: 0,
+        });
+        setMapReady(true);
+        setShowFallbackSketch(false);
+      };
+
+      if (map.loaded() && map.isStyleLoaded()) {
+        setupRouteLayers();
+      } else {
+        map.once("load", setupRouteLayers);
+      }
+
+      map.on("error", (event) => {
+        console.error(event.error);
+      });
+
+      return () => resizeObserver.disconnect();
+    }
+
+    let cleanup: (() => void) | undefined;
+
+    initMap()
+      .then((dispose) => {
+        cleanup = dispose;
+      })
+      .catch((error) => {
+        console.error(error);
+        mapRef.current = null;
+        setMapReady(false);
+        setMapFailed(true);
+        setShowFallbackSketch(true);
+      });
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(fallbackTimer);
+      cleanup?.();
+      mapRef.current?.remove();
+      mapRef.current = null;
+      setMapReady(false);
+    };
+  }, [route]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !mapReady) return;
+
+    const currentSource = map.getSource("current-cue");
+    if (currentSource && "setData" in currentSource) {
+      (currentSource as GeoJSONSource).setData(cueFeature(currentStep));
+    }
+
+    const center = currentStep.landmark.coordinate ?? currentStep.coordinate;
+    if (previewing) {
+      map.flyTo({
+        center: [center.lng, center.lat],
+        zoom: 17,
+        pitch: 0,
+        bearing: 0,
+        duration: 1800,
+        essential: true,
+      });
+      return;
+    }
+
+    map.fitBounds(routeBounds(route.route_geometry), {
+      padding: { top: 36, right: 40, bottom: 70, left: 40 },
+      duration: 600,
+      pitch: 0,
+      bearing: 0,
+    });
+  }, [currentStep, mapReady, previewing, route.route_geometry]);
+
   return (
-      <div className="relative h-full min-h-[190px] overflow-hidden bg-[#e8f5ee]">
+    <div className="relative h-full min-h-[190px] overflow-hidden bg-[#e8f5ee]">
+      <div ref={containerRef} className="absolute inset-0" />
       <GoogleStaticBasemap route={route} currentStep={currentStep} viewport={viewport} />
+      <RouteSketch
+        route={route}
+        currentStep={currentStep}
+        viewport={viewport}
+        isFallback={mapFailed || (!mapReady && showFallbackSketch)}
+      />
       <div className="absolute right-3 top-3 z-20 flex items-center gap-2 rounded-full bg-white/95 px-2 py-2 text-xs font-black text-[#0b1f17] shadow-sm backdrop-blur">
         <span className="grid h-7 w-7 place-items-center rounded-full bg-[#0b1f17] text-white">
           N
@@ -47,6 +260,92 @@ export default function RouteMap({ route, currentStep, previewing, onCollapse }:
   );
 }
 
+function addOrUpdateSource(map: Map, id: string, data: GeoJSON.Feature | GeoJSON.FeatureCollection) {
+  const source = map.getSource(id);
+  if (source && "setData" in source) {
+    (source as GeoJSONSource).setData(data);
+    return;
+  }
+
+  map.addSource(id, {
+    type: "geojson",
+    data,
+  });
+}
+
+function cueCollection(steps: NavStep[]) {
+  return {
+    type: "FeatureCollection" as const,
+    features: steps.map(cueFeature),
+  };
+}
+
+function cueFeature(step: NavStep) {
+  const coordinate = step.landmark.coordinate ?? step.coordinate;
+
+  return {
+    type: "Feature" as const,
+    properties: {
+      step_index: step.step_index,
+      instruction: step.instruction,
+    },
+    geometry: {
+      type: "Point" as const,
+      coordinates: [coordinate.lng, coordinate.lat],
+    },
+  };
+}
+
+function endpointCollection(route: NavigationRoute) {
+  return {
+    type: "FeatureCollection" as const,
+    features: [
+      {
+        type: "Feature" as const,
+        properties: { color: "#00B14F" },
+        geometry: {
+          type: "Point" as const,
+          coordinates: [route.origin.coordinate.lng, route.origin.coordinate.lat],
+        },
+      },
+      {
+        type: "Feature" as const,
+        properties: { color: "#ffb000" },
+        geometry: {
+          type: "Point" as const,
+          coordinates: [route.destination.coordinate.lng, route.destination.coordinate.lat],
+        },
+      },
+    ],
+  };
+}
+
+function routeLine(coordinates: [number, number][]) {
+  return {
+    type: "Feature" as const,
+    properties: {},
+    geometry: {
+      type: "LineString" as const,
+      coordinates,
+    },
+  };
+}
+
+function routeBounds(coordinates: [number, number][]) {
+  const lngs = coordinates.map(([lng]) => lng);
+  const lats = coordinates.map(([, lat]) => lat);
+
+  return [
+    [Math.min(...lngs), Math.min(...lats)],
+    [Math.max(...lngs), Math.max(...lats)],
+  ] as [[number, number], [number, number]];
+}
+
+type StaticMapViewport = {
+  center: { lat: number; lng: number };
+  zoom: number;
+};
+
 function GoogleStaticBasemap({
   route,
   currentStep,
@@ -59,7 +358,6 @@ function GoogleStaticBasemap({
   const [imageFailed, setImageFailed] = useState(false);
   const current = currentStep.landmark.coordinate ?? currentStep.coordinate;
   const params = new URLSearchParams({
-    theme: "grab-green-aligned-v5",
     path: route.route_geometry.map(([lng, lat]) => `${lng},${lat}`).join(";"),
     center: `${viewport.center.lat},${viewport.center.lng}`,
     zoom: String(viewport.zoom),
@@ -68,37 +366,32 @@ function GoogleStaticBasemap({
     current: `${current.lat},${current.lng}`,
   });
 
-  if (imageFailed) {
-    return <RouteOverlay route={route} currentStep={currentStep} viewport={viewport} showGrid />;
-  }
+  if (imageFailed) return null;
 
   return (
-    <>
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
-        src={`/api/google-static-map?${params.toString()}`}
-        alt="Styled route basemap"
-        className="absolute inset-0 h-full w-full object-fill"
-        onError={() => setImageFailed(true)}
-      />
-      <RouteOverlay route={route} currentStep={currentStep} viewport={viewport} />
-    </>
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={`/api/google-static-map?${params.toString()}`}
+      alt="Top-down walking route basemap"
+      className="absolute inset-0 z-[1] h-full w-full object-fill"
+      onError={() => setImageFailed(true)}
+    />
   );
 }
 
-function RouteOverlay({
+function RouteSketch({
   route,
   currentStep,
   viewport,
-  showGrid = false,
+  isFallback,
 }: {
   route: NavigationRoute;
   currentStep: NavStep;
   viewport: StaticMapViewport;
-  showGrid?: boolean;
+  isFallback: boolean;
 }) {
   const projectedRoute = projectCoordinates(route.route_geometry, viewport);
-  const currentPoint = projectCoordinateToViewport(
+  const currentPoint = projectCoordinate(
     [
       (currentStep.landmark.coordinate ?? currentStep.coordinate).lng,
       (currentStep.landmark.coordinate ?? currentStep.coordinate).lat,
@@ -109,7 +402,7 @@ function RouteOverlay({
     const coordinate = step.landmark.coordinate ?? step.coordinate;
     return {
       key: step.step_index,
-      point: projectCoordinateToViewport([coordinate.lng, coordinate.lat], viewport),
+      point: projectCoordinate([coordinate.lng, coordinate.lat], viewport),
       active: step.step_index === currentStep.step_index,
     };
   });
@@ -121,13 +414,7 @@ function RouteOverlay({
       preserveAspectRatio="none"
       aria-hidden="true"
     >
-      {showGrid && [180, 360, 540, 720].map((position) => (
-        <g key={position} opacity="0.28">
-          <line x1={position} y1="40" x2={position} y2="380" stroke="#8ab9a1" strokeWidth="2" />
-          <line x1="40" y1={position / 2} x2="860" y2={position / 2} stroke="#8ab9a1" strokeWidth="2" />
-        </g>
-      ))}
-      <path d={projectedRoute.path} fill="none" stroke="#ffffff" strokeWidth="22" strokeLinecap="round" strokeLinejoin="round" />
+      <path d={projectedRoute.path} fill="none" stroke="#ffffff" strokeWidth="22" strokeLinecap="round" strokeLinejoin="round" opacity={isFallback ? 1 : 0.95} />
       <path d={projectedRoute.path} fill="none" stroke="#1677ff" strokeWidth="13" strokeLinecap="round" strokeLinejoin="round" />
       {cuePoints.map(({ key, point, active }) => (
         <circle
@@ -149,13 +436,8 @@ function RouteOverlay({
   );
 }
 
-type StaticMapViewport = {
-  center: { lat: number; lng: number };
-  zoom: number;
-};
-
 function projectCoordinates(coordinates: [number, number][], viewport: StaticMapViewport) {
-  const points = coordinates.map((coordinate) => projectCoordinateToViewport(coordinate, viewport));
+  const points = coordinates.map((coordinate) => projectCoordinate(coordinate, viewport));
   const path = points.map((point, index) => `${index === 0 ? "M" : "L"} ${point.x.toFixed(2)} ${point.y.toFixed(2)}`).join(" ");
 
   return {
@@ -166,11 +448,11 @@ function projectCoordinates(coordinates: [number, number][], viewport: StaticMap
 }
 
 function getStaticMapViewport(coordinates: [number, number][]): StaticMapViewport {
-  const mercatorPoints = coordinates.map(([lng, lat]) => mercatorPoint(lng, lat));
-  const minX = Math.min(...mercatorPoints.map((point) => point.x));
-  const maxX = Math.max(...mercatorPoints.map((point) => point.x));
-  const minY = Math.min(...mercatorPoints.map((point) => point.y));
-  const maxY = Math.max(...mercatorPoints.map((point) => point.y));
+  const points = coordinates.map(([lng, lat]) => mercatorPoint(lng, lat));
+  const minX = Math.min(...points.map((point) => point.x));
+  const maxX = Math.max(...points.map((point) => point.x));
+  const minY = Math.min(...points.map((point) => point.y));
+  const maxY = Math.max(...points.map((point) => point.y));
   const center = latLngFromMercator((minX + maxX) / 2, (minY + maxY) / 2);
   const zoomX = Math.log2((MAP_WIDTH - 170) / Math.max((maxX - minX) * 256, 0.000001));
   const zoomY = Math.log2((MAP_HEIGHT - 120) / Math.max((maxY - minY) * 256, 0.000001));
@@ -179,7 +461,10 @@ function getStaticMapViewport(coordinates: [number, number][]): StaticMapViewpor
   return { center, zoom };
 }
 
-function projectCoordinateToViewport([lng, lat]: [number, number], viewport: StaticMapViewport) {
+function projectCoordinate(
+  [lng, lat]: [number, number],
+  viewport: StaticMapViewport,
+) {
   const point = mercatorPoint(lng, lat);
   const center = mercatorPoint(viewport.center.lng, viewport.center.lat);
   const worldSize = 256 * 2 ** viewport.zoom;
@@ -191,7 +476,8 @@ function projectCoordinateToViewport([lng, lat]: [number, number], viewport: Sta
 }
 
 function mercatorPoint(lng: number, lat: number) {
-  const sinLat = Math.sin((Math.max(Math.min(lat, 85.05112878), -85.05112878) * Math.PI) / 180);
+  const clampedLat = Math.max(Math.min(lat, 85.05112878), -85.05112878);
+  const sinLat = Math.sin((clampedLat * Math.PI) / 180);
 
   return {
     x: (lng + 180) / 360,

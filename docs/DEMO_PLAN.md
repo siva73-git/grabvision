@@ -12,6 +12,7 @@ This is the working checklist for getting GrabVision demo-ready. Update it as it
 - [ ] 4. Add demo lock / reliability toggle
 - [ ] 5. iPhone local test path
 - [ ] 6. Compass/sun decision
+- [x] 7. Remotion portrait demo composition
 - [ ] Nice-to-have: three-panel landmark view
 
 ## 1. Demo Walkthrough Script
@@ -79,6 +80,7 @@ Let the preview advance.
 - Section 2 should remain usable even when GrabMaps style resources fail. Current implementation is exterior-image-first: demo images are stored in `public/demo-images/`, and the route-map context remains in Section 1.
 - Avoid Google Places venue-photo candidates for the cue cards; they tend to return interiors, food, or storefront albums. Prefer Google Street View Static exterior images that match what a walker sees from the route.
 - GrabMaps style/tile proxy responses are cached locally in `.cache/grabmaps/` after each successful upstream download. If GrabMaps becomes unstable after a successful fetch, the app serves the cached response for localhost demo reliability.
+- GrabMaps route responses are also cached locally after successful navigation/direction requests. If route generation flakes during the demo, the app can reuse the last good route response before falling back to the curated route.
 
 ### Acceptance Criteria
 
@@ -87,6 +89,32 @@ Let the preview advance.
 - The demo shows route input, story cards, and preview journey.
 - The fallback/API story is mentioned without becoming too technical.
 - The close ties back to the product idea.
+
+## 7. Remotion Portrait Demo Composition
+
+Goal: a reusable video render that can show the product without depending on a live browser session.
+
+Current composition: `direction-buddy-demo`
+
+Commands:
+
+```bash
+npm run remotion:preview
+npm run remotion:render
+```
+
+Flow:
+
+- Opens with the four pain-point questions.
+- Shows Direction Buddy in a mobile phone frame with route inputs and all three sections visible.
+- Taps through Section 2 cue cards at roughly one second per cue.
+- Taps quickly back to the start.
+- Collapses Section 1 and Section 3, then advances Section 2 at 2.5 seconds per cue.
+- Calls out the solar-position guide for several slow cue points, then separately calls out the animated direction cues.
+- Closes with `Never get lost again`.
+- Ends with upcoming enhancements: fully animated journey preview and optional left/right side-view panels.
+
+The composition imports `DEMO_ROUTE` directly, so route imagery and cue text should stay aligned with the app demo.
 
 ## Nice-to-Have: Three-Panel Landmark View
 

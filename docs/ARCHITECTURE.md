@@ -19,7 +19,8 @@ The main UI is implemented in `app/page.tsx`.
 1. **Route controls**
    - Origin and destination fields are shown at the top of the app.
    - The current default values are the curated downtown demo route.
-   - The `Route` button calls `/api/navigation`.
+   - The refresh and `Route` buttons keep the curated demo route when the inputs match the default Furama City Centre -> Maxwell Food Centre pair. This prevents a live provider refresh from changing the 1.1km demo distance or replacing Section 2 exterior cue images.
+   - If the user changes the inputs away from the defaults, `Route` calls `/api/navigation` for a live provider route.
 
 2. **Grab-style navigation surface**
    - Uses Grab green (`#00B14F`), white surfaces, compact controls, and a Grab-first font stack.
@@ -27,20 +28,21 @@ The main UI is implemented in `app/page.tsx`.
    - iPhone safe-area padding is applied with `env(safe-area-inset-*)` so the header and story controls avoid the notch/home indicator.
 
 3. **Map panel**
-   - `components/RouteMap.tsx` renders Section 1 as a styled Google Static Maps basemap plus an app-owned SVG route/cue overlay.
-   - The basemap is loaded through `/api/google-static-map` and uses Google only for map context, not route generation.
-   - The route line, start/end dots, cue dots, and active facing arrow are drawn from `NavigationRoute.route_geometry` and `NavigationRoute.steps`.
-   - The Google Static Maps request and the SVG overlay share the same computed center, zoom, size, and Web Mercator projection so the route overlay aligns with the basemap.
-   - If Google Static Maps fails, the panel falls back to the same app-owned north-up SVG route sketch on a neutral background for demo reliability.
+   - `components/RouteMap.tsx` renders Section 1 as a top-down basemap plus route/cue overlay using the same Web Mercator viewport so the route and map stay aligned.
+   - GrabMaps MapLibre is still initialized and receives GeoJSON route/cue layers. Because the current GrabMaps canvas can render pale/blank in the demo environment, a styled static top-down basemap is layered under the app-owned route overlay for visual reliability.
+   - The visible route line, start/end dots, cue dots, and active facing arrow are drawn from `NavigationRoute.route_geometry` and `NavigationRoute.steps`.
+   - If the static basemap fails, the same app-owned north-up route overlay still paints the route, cue dots, and facing arrow on the neutral background for demo reliability.
    - The map camera stays `pitch: 0` and `bearing: 0`; facing is shown with an arrow instead of rotating or tilting the map.
+   - Bottom overlay badges are intentionally flush to the Section 1 corners: distance/time on the left and a Direction Buddy preview pill on the right. This keeps the demo focused on the product UI and prevents provider attribution clutter from competing with the route.
    - This is Section 1 of the UX: a collapsible 2D route overview for the initial “how do I go?” mental model.
 
 4. **Landmark cue cards**
    - `components/StoryCard.tsx` renders the current `NavStep`.
    - Users can swipe horizontally through route steps.
    - Card changes trigger haptics where the browser supports `navigator.vibrate`.
-   - Demo route cards are intentionally frequent and pedestrian-scale: hotel frontage, People's Park Centre, Chinatown MRT Exit C, Pagoda Street, Trengganu Street, Ann Siang Road, CPF Maxwell, and Maxwell Food Centre.
+   - Demo route cards are intentionally frequent and pedestrian-scale: hotel frontage, People's Park Centre, Chinatown MRT Exit C, Pagoda Street, Trengganu Street, Ann Siang Road, the Kadayanallur Street corner, and Maxwell Food Centre.
    - Section 2 is now exterior-image-first for demo reliability: all current demo cue images live under `public/demo-images/` and are referenced directly by `landmark.image_url`.
+   - Section 2 includes a small solar guide icon. It estimates the sun azimuth from the current local time, active cue coordinate, and target bearing, then places the icon roughly where the walker should expect the sun relative to their facing direction.
    - Google Places venue photos are not used for the current demo path because they often return interiors, food, or unrelated venue shots rather than what a walking user sees from the street.
    - Street View Static exterior images are the preferred demo asset source. The current route has 12 low-resolution Street View cue images cached under `public/demo-images/streetview/`.
    - The Section 2 map inset is currently disabled because it competed with the exterior cue image. Route-map context stays in Section 1 while Section 2 focuses on what the walker should see.
@@ -51,7 +53,16 @@ The main UI is implemented in `app/page.tsx`.
    - It keeps the final landmark visible without permanently consuming story-card space.
    - This is Section 3 of the UX: destination recognition.
 
-6. **Preview Journey**
+6. **Remotion demo video**
+   - A standalone Remotion composition lives under `remotion/`.
+   - It imports `DEMO_ROUTE` from `lib/navigation.ts`, so the video uses the same 12 cue points, instructions, images, route geometry, and distance summary as the localhost demo.
+   - The composition renders at `1080x1920` portrait/mobile aspect ratio.
+   - Story flow: opening problem questions, full three-section app view, one-second cue walkthrough, rapid backtracking to the start, collapsed Section 1/Section 3 journey with 2.5 seconds per cue, the closing line, then an upcoming-enhancements page.
+   - During the slower Section 2 pass, timed feature callouts highlight the solar-position guide first, then the animated direction cue behavior. These callouts do not overlap.
+   - Render command: `npm run remotion:render`.
+   - Preview command: `npm run remotion:preview`.
+
+7. **Preview Journey**
    - The play button starts an approximately 15-second route preview.
    - The app auto-advances the cards and the overview map flies to each step while staying top-down.
 
@@ -77,6 +88,7 @@ All runtime provider calls are handled by App Router Route Handlers.
      9. Falls back to curated demo landmarks/images if providers fail.
      10. Google Places photo APIs are kept for future enrichment, but the current demo does not use venue photos as cue-card imagery.
    - Output: a `NavigationRoute`.
+   - Successful GrabMaps navigation/direction responses are cached under `.cache/grabmaps/` by request URL. If GrabMaps fails later, the route handler uses the last good cached route response before falling back to the curated demo route.
 
 3. **`GET /api/map-style`**
    - Fetches `https://maps.grab.com/api/style.json`.

@@ -1,5 +1,10 @@
 import { NextRequest } from "next/server";
 import {
+  grabMapsCacheKey,
+  readGrabMapsCache,
+  writeGrabMapsCache,
+} from "@/lib/grabmaps-cache";
+import {
   bearingBetween,
   Coordinate,
   DEMO_DESTINATION,
@@ -129,8 +134,9 @@ async function buildLiveRoute(
   const direction = await fetchGrabRoute(origin.coordinate, destination.coordinate, grabKey);
   const rawSteps = extractSteps(direction);
   const routeGeometry = extractGeometry(direction, origin.coordinate, destination.coordinate);
-  const totalDistance = Number(direction?.routes?.[0]?.distance ?? sum(rawSteps, "distance"));
-  const totalDuration = Number(direction?.routes?.[0]?.duration ?? sum(rawSteps, "duration"));
+  const route = firstRoute(direction);
+  const totalDistance = Number(route?.distance ?? sum(rawSteps, "distance"));
+  const totalDuration = Number(route?.duration ?? sum(rawSteps, "duration"));
 
   const usableSteps =
     rawSteps.length > 0
@@ -165,20 +171,14 @@ async function fetchGrabRoute(origin: Coordinate, destination: Coordinate, apiKe
 
 async function fetchGrabNavigation(origin: Coordinate, destination: Coordinate, apiKey: string) {
   const request = new URL("https://maps.grab.com/api/v1/maps/eta/v1/navigation");
-  request.searchParams.set("requestID", `grabvision-${Date.now()}`);
+  request.searchParams.set("requestID", routeRequestId(origin, destination));
   request.searchParams.append("coordinates", `${origin.lng},${origin.lat}`);
   request.searchParams.append("coordinates", `${destination.lng},${destination.lat}`);
   request.searchParams.set("profile", "walking");
   request.searchParams.set("overview", "full");
 
-  const response = await fetch(request, {
-    headers: { Authorization: `Bearer ${apiKey}` },
-    cache: "no-store",
-  });
-
-  if (!response.ok) return undefined;
-
-  const data = await response.json();
+  const data = await fetchGrabJsonWithCache(request, apiKey);
+  if (!data) return undefined;
   const code = String(asRecord(data)?.code ?? "").toLowerCase();
   return code === "ok" ? data : undefined;
 }
@@ -190,16 +190,45 @@ async function fetchGrabDirection(origin: Coordinate, destination: Coordinate, a
   request.searchParams.set("profile", "walking");
   request.searchParams.set("overview", "full");
 
-  const response = await fetch(request, {
-    headers: { Authorization: `Bearer ${apiKey}` },
-    cache: "no-store",
-  });
+  const data = await fetchGrabJsonWithCache(request, apiKey);
+  if (!data) throw new Error("Grab walking directions failed and no cached route exists");
 
-  if (!response.ok) {
-    throw new Error(`Grab walking directions failed: ${response.status}`);
+  return data;
+}
+
+async function fetchGrabJsonWithCache(request: URL, apiKey: string) {
+  const cacheKey = grabMapsCacheKey(request);
+
+  try {
+    const response = await fetch(request, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+      cache: "no-store",
+    });
+
+    if (response.ok) {
+      const body = Buffer.from(await response.arrayBuffer());
+      await writeGrabMapsCache(cacheKey, {
+        body,
+        contentType: response.headers.get("content-type") ?? "application/json",
+        status: response.status,
+      });
+      return JSON.parse(body.toString("utf8")) as JsonRecord;
+    }
+  } catch {
+    // Network/provider errors fall through to stale cache.
   }
 
-  return response.json();
+  const cached = await readGrabMapsCache(cacheKey);
+  if (!cached) return undefined;
+
+  return JSON.parse(cached.body.toString("utf8")) as JsonRecord;
+}
+
+function routeRequestId(origin: Coordinate, destination: Coordinate) {
+  const start = `${origin.lng.toFixed(6)}-${origin.lat.toFixed(6)}`;
+  const end = `${destination.lng.toFixed(6)}-${destination.lat.toFixed(6)}`;
+
+  return `grabvision-${start}-${end}`;
 }
 
 function extractSteps(direction: JsonRecord): RawStep[] {

@@ -22,6 +22,9 @@ export default function Home() {
     () => Math.round(((currentIndex + 1) / route.steps.length) * 100),
     [currentIndex, route.steps.length],
   );
+  const isDefaultDemoRoute =
+    origin.trim().toLowerCase() === DEMO_ORIGIN.label.toLowerCase() &&
+    destination.trim().toLowerCase() === DEMO_DESTINATION.label.toLowerCase();
 
   const triggerHaptic = useCallback(() => {
     if (typeof navigator !== 'undefined' && navigator.vibrate) {
@@ -29,14 +32,18 @@ export default function Home() {
     }
   }, []);
 
-  const loadNavigation = useCallback(async (demo = false) => {
+  const loadNavigation = useCallback(async (forceDemo = false) => {
     setIsLoading(true);
     try {
+      const useDemoRoute =
+        forceDemo ||
+        (origin.trim().toLowerCase() === DEMO_ORIGIN.label.toLowerCase() &&
+          destination.trim().toLowerCase() === DEMO_DESTINATION.label.toLowerCase());
       const response = await fetch('/api/navigation', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          demo,
+          demo: useDemoRoute,
           origin: { label: origin, coordinate: DEMO_ORIGIN.coordinate },
           destination: { label: destination, coordinate: DEMO_DESTINATION.coordinate },
         }),
@@ -44,6 +51,7 @@ export default function Home() {
       const data = (await response.json()) as NavigationRoute;
       setRoute(data);
       setCurrentIndex(0);
+      setIsPreviewing(false);
     } finally {
       setIsLoading(false);
     }
@@ -99,13 +107,13 @@ export default function Home() {
           <div className="mx-auto flex max-w-5xl items-center justify-between gap-3">
             <div>
               <div className="text-xs font-black uppercase text-[#00B14F]">GrabVision</div>
-              <div className="text-xl font-black">Walk by what you see</div>
+              <div className="text-xl font-black">Direction Buddy</div>
             </div>
             <button
               type="button"
               className="grid h-11 w-11 place-items-center rounded-full bg-[#00B14F] text-white shadow-sm"
-              onClick={() => loadNavigation(false)}
-              aria-label="Refresh live route"
+              onClick={() => loadNavigation(isDefaultDemoRoute)}
+              aria-label="Refresh route"
             >
               <RefreshCw className={`h-5 w-5 ${isLoading ? 'animate-spin' : ''}`} />
             </button>
@@ -132,7 +140,7 @@ export default function Home() {
             </label>
             <button
               type="button"
-              onClick={() => loadNavigation(false)}
+              onClick={() => loadNavigation(isDefaultDemoRoute)}
               className="rounded-lg bg-[#0b1f17] px-4 py-2 text-sm font-black text-white"
             >
               Route
@@ -159,19 +167,22 @@ export default function Home() {
 
           {!isOverviewCollapsed && (
             <>
-            <div className="absolute bottom-3 left-3 z-20 rounded-lg bg-white/95 px-4 py-3 shadow-lg backdrop-blur">
+            <div className="absolute bottom-0 left-0 z-30 min-w-40 rounded-tr-xl bg-white/95 px-5 py-3 shadow-lg backdrop-blur">
               <div className="text-lg font-black">{route.summary.distance_text} · {route.summary.duration_text}</div>
             </div>
             <button
               type="button"
-              className="absolute bottom-3 right-3 z-20 grid h-12 w-12 place-items-center rounded-full bg-[#00B14F] text-white shadow-lg"
+              className="absolute bottom-0 right-0 z-30 flex min-w-52 items-center justify-end gap-2 rounded-tl-xl bg-[#00B14F] px-4 py-3 text-sm font-black text-white shadow-lg"
               onClick={() => {
                 setCurrentIndex(0);
                 setIsPreviewing(true);
               }}
               aria-label="Preview journey"
             >
-              <Play className="h-5 w-5 fill-current" />
+              <span>Direction Buddy</span>
+              <span className="grid h-8 w-8 place-items-center rounded-full bg-white/18">
+                <Play className="h-4 w-4 fill-current" />
+              </span>
             </button>
           </>
           )}
